@@ -353,8 +353,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .kg-step { width: 22px; height: 22px; flex: none; border-radius: 6px; border: 1px solid rgba(231,226,214,0.9); background: rgba(243,239,230,0.65); color: #8a6a3f; font-size: 15px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   .kg-step:active { transform: scale(0.92); }
 
-  /* --- drawer frontmatter (Details / Raw) --- */
-  .kg-meta-tabs { display: inline-flex; gap: 2px; background: rgba(243,239,230,0.7); border: 1px solid rgba(231,226,214,0.9); border-radius: 8px; padding: 2px; }
+  /* --- segmented pill shared by View, Pages, and drawer Details/Raw tabs --- */
+  .kg-seg { display: inline-flex; gap: 2px; background: rgba(243,239,230,0.7); border: 1px solid rgba(231,226,214,0.9); border-radius: 8px; padding: 2px; }
   .kg-desc { font-size: 12.5px; line-height: 1.5; color: #5c5b63; font-style: italic; margin: 0 0 8px; }
   .kg-mrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 8px; }
   .kg-mrow:last-child { margin-bottom: 0; }
@@ -375,7 +375,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   :root[data-theme="dark"] #kg-panel h1 { color: #f1eff4 !important; }
   :root[data-theme="dark"] #kg-panel-body p { color: #9a98a4 !important; }
   :root[data-theme="dark"] #kg-theme, :root[data-theme="dark"] #kg-collapse { background: rgba(44,49,60,0.7) !important; border-color: rgba(86,92,107,0.55) !important; color: #c9a36a !important; }
-  :root[data-theme="dark"] #kg-groupby, :root[data-theme="dark"] .kg-meta-tabs { background: rgba(44,49,60,0.7) !important; border-color: rgba(86,92,107,0.55) !important; }
+  :root[data-theme="dark"] .kg-seg { background: rgba(44,49,60,0.7) !important; border-color: rgba(86,92,107,0.55) !important; }
   :root[data-theme="dark"] .kg-gb { color: #9a98a4; }
   :root[data-theme="dark"] .kg-step { background: rgba(44,49,60,0.7); border-color: rgba(86,92,107,0.55); color: #c9a36a; }
   :root[data-theme="dark"] .kg-gb.on { background: #3a4150; color: #f0eef4; box-shadow: 0 1px 2px rgba(0,0,0,0.4); }
@@ -424,6 +424,10 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
   <div id="kg-panel-body">
     <p style="margin: 11px 0 0; font-size: 12.5px; line-height: 1.55; color: #6c6b73;">@@SUBTITLE@@</p>
+    <div style="display: flex; gap: 18px; margin-top: 12px; font-variant-numeric: tabular-nums;">
+      <div><span class="kg-num">@@NNODES@@</span><span class="kg-unit">nodes</span></div>
+      <div><span class="kg-num">@@NEDGES@@</span><span class="kg-unit">links</span></div>
+    </div>
 
     <div class="kg-hr"></div>
     <div class="kg-cap" style="margin-bottom: 4px;">Page type</div>
@@ -445,10 +449,6 @@ _TEMPLATE = r"""<!DOCTYPE html>
       <button class="kg-step" data-z="+" aria-label="Zoom in">+</button>
     </div>
     <div class="kg-hr"></div>
-    <div style="display: flex; gap: 18px; font-variant-numeric: tabular-nums;">
-      <div><span class="kg-num">@@NNODES@@</span><span class="kg-unit">pages</span></div>
-      <div><span class="kg-num">@@NEDGES@@</span><span class="kg-unit">links</span></div>
-    </div>
 
     <p style="margin: 13px 0 0; font-size: 11px; line-height: 1.5; color: #9b9aa2;">Node size reflects its connections. Drag to pan, scroll to zoom — more names appear as you zoom in. Click any node to read its page.</p>
     <p style="margin: 8px 0 0; font-size: 10px; line-height: 1.5; color: #b7b6bd;">Regenerated automatically on every edit · @@BUILT@@</p>
@@ -456,14 +456,14 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <div class="kg-hr"></div>
     <div class="kg-row" style="margin-bottom: 8px;">
       <div class="kg-cap">View</div>
-      <div id="kg-view" style="display: inline-flex; gap: 2px; background: rgba(243,239,230,0.7); border: 1px solid rgba(231,226,214,0.9); border-radius: 8px; padding: 2px;">
+      <div id="kg-view" class="kg-seg">
         <button class="kg-gb" data-v="net">Net</button>
         <button class="kg-gb" data-v="grid">Grid</button>
       </div>
     </div>
     <div class="kg-row" style="margin-bottom: 8px;">
       <div class="kg-cap">Pages</div>
-      <div id="kg-groupby" style="display: inline-flex; gap: 2px; background: rgba(243,239,230,0.7); border: 1px solid rgba(231,226,214,0.9); border-radius: 8px; padding: 2px;">
+      <div id="kg-groupby" class="kg-seg">
         <button class="kg-gb" data-g="type">Type</button>
         <button class="kg-gb" data-g="folder">Folder</button>
         <button class="kg-gb" data-g="az">A–Z</button>
@@ -483,7 +483,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <div id="kg-d-meta" style="margin-top: 16px;">
       <div class="kg-row" style="margin-bottom: 9px;">
         <div class="kg-cap">Frontmatter</div>
-        <div id="kg-meta-tabs" class="kg-meta-tabs">
+        <div id="kg-meta-tabs" class="kg-seg">
           <button class="kg-gb" data-m="clean">Details</button>
           <button class="kg-gb" data-m="raw">Raw</button>
         </div>
