@@ -295,11 +295,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
   /* --- graph --- */
   .kg-edge { stroke: var(--kg-edge, #dbe3ec); stroke-width: 1; fill: none; transition: stroke .22s, opacity .22s; }
-  .kg-edge.dim { opacity: .3; }
+  .kg-edge.dim { opacity: 0; }
   .kg-edge.hi  { stroke: var(--kg-hi, #4f7aa8); stroke-width: 1.7; stroke-dasharray: 5 4; animation: kg-march .7s linear infinite; }
   .kg-edge-link { stroke: #c98a4e; stroke-width: 1.3; opacity: .6; }
   .kg-node { position: absolute; left: 0; top: 0; cursor: pointer; transition: opacity .5s ease; }
-  .kg-node.dim { opacity: .26; }
+  .kg-node.dim { opacity: 0; pointer-events: none; }
   .kg-dot { border-radius: 50%; transition: transform .15s ease; box-shadow: 0 1px 2.5px rgba(40,30,15,.16); }
   .kg-node:hover .kg-dot { transform: scale(1.13); }
   .kg-pulse { position: absolute; left: 0; top: 0; border-radius: 50%; border: 2px solid var(--kg-hi, #4f7aa8); opacity: .5; pointer-events: none; animation: kg-pulse 2.8s cubic-bezier(.4,0,.2,1) infinite; }
@@ -307,7 +307,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     font-family: var(--serif); font-size: 13px; font-weight: 600; color: #2c2c34;
     text-shadow: 0 0 3px var(--kg-bg), 0 0 3px var(--kg-bg), 0 0 6px var(--kg-bg); }
   .kg-label.vis, .kg-label.show { opacity: 1; }
-  .kg-label.dim { opacity: .12; }
+  .kg-label.dim { opacity: 0; }
   .kg-label.hero { font-size: 16px; font-weight: 700; color: #1c1c22; }
   @keyframes kg-march { to { stroke-dashoffset: -18; } }
   @keyframes kg-pulse { 0% { transform: scale(1); opacity: .5; } 70% { opacity: 0; } 100% { transform: scale(2.7); opacity: 0; } }
@@ -384,8 +384,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   :root[data-theme="dark"] .kg-item { color: #c4c2cc; }
   :root[data-theme="dark"] .kg-item:hover { background: rgba(255,255,255,0.06); }
   :root[data-theme="dark"] .kg-item.sel { background: #2d333f; color: #f1eff4; }
-  :root[data-theme="dark"] #kg-drawer { background: #1a1d25 !important; border-left-color: #2c313c !important; box-shadow: -20px 0 50px rgba(0,0,0,0.5) !important; }
-  :root[data-theme="dark"] #kg-drawer > div:first-child { border-bottom-color: #262b35 !important; }
+  :root[data-theme="dark"] #kg-drawer { background: #1a1d25 !important; border-color: #2c313c !important; box-shadow: -20px 0 50px rgba(0,0,0,0.5) !important; }
   :root[data-theme="dark"] #kg-d-type { color: #8e8c96 !important; }
   :root[data-theme="dark"] #kg-d-close { background: #2a2f3a !important; color: #b8b6c0 !important; border-color: #3a4150 !important; }
   :root[data-theme="dark"] #kg-d-title { color: #f1eff4 !important; }
@@ -445,13 +444,6 @@ _TEMPLATE = r"""<!DOCTYPE html>
       <input id="kg-zoom" type="range" min="0.4" max="2.6" step="0.02" aria-label="Zoom">
       <button class="kg-step" data-z="+" aria-label="Zoom in">+</button>
     </div>
-    <div class="kg-cap" style="margin: 11px 0 6px;">Name density</div>
-    <div id="kg-denctl" class="kg-slider">
-      <button class="kg-step" data-d="-" aria-label="Fewer names">−</button>
-      <input id="kg-density" type="range" min="0" max="1" step="0.05" aria-label="Name density">
-      <button class="kg-step" data-d="+" aria-label="More names">+</button>
-    </div>
-
     <div class="kg-hr"></div>
     <div style="display: flex; gap: 18px; font-variant-numeric: tabular-nums;">
       <div><span class="kg-num">@@NNODES@@</span><span class="kg-unit">pages</span></div>
@@ -462,6 +454,13 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <p style="margin: 8px 0 0; font-size: 10px; line-height: 1.5; color: #b7b6bd;">Regenerated automatically on every edit · @@BUILT@@</p>
 
     <div class="kg-hr"></div>
+    <div class="kg-row" style="margin-bottom: 8px;">
+      <div class="kg-cap">View</div>
+      <div id="kg-view" style="display: inline-flex; gap: 2px; background: rgba(243,239,230,0.7); border: 1px solid rgba(231,226,214,0.9); border-radius: 8px; padding: 2px;">
+        <button class="kg-gb" data-v="net">Net</button>
+        <button class="kg-gb" data-v="grid">Grid</button>
+      </div>
+    </div>
     <div class="kg-row" style="margin-bottom: 8px;">
       <div class="kg-cap">Pages</div>
       <div id="kg-groupby" style="display: inline-flex; gap: 2px; background: rgba(243,239,230,0.7); border: 1px solid rgba(231,226,214,0.9); border-radius: 8px; padding: 2px;">
@@ -474,12 +473,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<aside id="kg-drawer" style="position: fixed; top: 0; right: 0; height: 100vh; width: clamp(360px, 30vw, 450px); z-index: 30; transform: translateX(112%); transition: transform .4s cubic-bezier(.4,0,.2,1); display: flex; flex-direction: column; background: #fff; border-left: 1px solid #e7e2d6; box-shadow: -20px 0 50px rgba(60,48,28,0.14);">
-  <div style="padding: 24px 24px 16px; border-bottom: 1px solid #ece7dc; flex: none; max-height: 42vh; overflow-y: auto;">
-    <div class="kg-row" style="align-items: flex-start; gap: 14px;">
-      <div id="kg-d-type" style="display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: .8px; color: #8a8992;"></div>
-      <button id="kg-d-close" aria-label="Close" style="background: #f3efe6; color: #6c6b73; border: 1px solid #e7e2d6; width: 30px; height: 30px; border-radius: 50%; font-size: 18px; line-height: 1; cursor: pointer; flex: none;">×</button>
-    </div>
+<aside id="kg-drawer" style="position: fixed; inset: 26px 26px 26px 338px; z-index: 30; transform: translateX(112%); transition: transform .4s cubic-bezier(.4,0,.2,1); display: flex; flex-direction: column; background: #fff; border: 1px solid #e7e2d6; border-radius: 18px; box-shadow: -20px 0 50px rgba(60,48,28,0.14);">
+  <button id="kg-d-close" aria-label="Close" style="position: absolute; top: 18px; right: 18px; z-index: 2; background: #f3efe6; color: #6c6b73; border: 1px solid #e7e2d6; width: 30px; height: 30px; border-radius: 50%; font-size: 18px; line-height: 1; cursor: pointer;">×</button>
+  <div id="kg-d-scroll" style="flex: 1; min-height: 0; overflow: auto;">
+  <div style="padding: 24px 24px 0; padding-left: max(24px, calc((100% - 760px) / 2)); padding-right: max(24px, calc((100% - 760px) / 2));">
+    <div id="kg-d-type" style="display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: .8px; color: #8a8992;"></div>
     <h2 id="kg-d-title" style="margin: 11px 0 0; font-family: var(--serif); font-size: 21px; font-weight: 700; line-height: 1.26; color: #1c1c22; text-wrap: pretty;"></h2>
     <div id="kg-d-path" style="margin-top: 8px; font-size: 11px; color: #a09e9a; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all;"></div>
     <div id="kg-d-meta" style="margin-top: 16px;">
@@ -495,7 +493,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     </div>
     <div id="kg-d-related" style="display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px;"></div>
   </div>
-  <div id="kg-d-body" style="flex: 1; min-height: 0; overflow: auto; padding: 18px 24px 30px; font-size: 13px; line-height: 1.72; color: #3c3c44;"></div>
+  <div id="kg-d-body" style="padding: 18px 24px 30px; padding-left: max(24px, calc((100% - 760px) / 2)); padding-right: max(24px, calc((100% - 760px) / 2)); font-size: 13px; line-height: 1.72; color: #3c3c44;"></div>
+  </div>
 </aside>
 
 <script>window.GRAPH_DATA = @@PAYLOAD@@;</script>
@@ -540,6 +539,7 @@ class KG {
     this.bindNodeList();
     this.bindPanel();
     this.bindControls();
+    this.bindView();
   }
 
   // ---- model: nodes, edges, adjacency, display props ----
@@ -688,16 +688,17 @@ class KG {
 
   bindCamera() {
     const st = this.stage; st.style.cursor = 'grab';
-    let pressId = null, panning = false, lx = 0, ly = 0, moved = 0;
-    st.addEventListener('pointerdown', e => { const el = e.target.closest('.kg-node'); lx = e.clientX; ly = e.clientY; moved = 0; pressId = el && el.dataset.id; panning = !el; if (panning) st.style.cursor = 'grabbing'; });
+    let pressId = null, panning = false, down = false, lx = 0, ly = 0, moved = 0;
+    st.addEventListener('pointerdown', e => { const el = e.target.closest('.kg-node'); lx = e.clientX; ly = e.clientY; moved = 0; down = true; pressId = el && el.dataset.id; panning = !el; if (panning) st.style.cursor = 'grabbing'; });
     this._onMove = e => {
-      if (pressId == null && !panning) return;
+      if (!down || (pressId == null && !panning)) return;
       const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
       if (panning) { this.tx += dx; this.ty += dy; this.moved = true; }
     };
     this._onUp = () => {
+      if (!down) return;                       // press began outside the stage (e.g. in the reading card): not ours
       if (moved < 5) { if (pressId != null) this.select(pressId); else if (this.selected) this.deselect(); }
-      if (panning) st.style.cursor = 'grab'; pressId = null; panning = false;
+      if (panning) st.style.cursor = 'grab'; pressId = null; panning = false; down = false;
     };
     window.addEventListener('pointermove', this._onMove);
     window.addEventListener('pointerup', this._onUp);
@@ -708,7 +709,7 @@ class KG {
       this.scale = Math.max(0.4, Math.min(2.6, this.scale * (e.deltaY < 0 ? 1.12 : 0.893)));
       this.tx = mx - wx * this.scale; this.ty = my - wy * this.scale; this.moved = true; this.lod(); this._syncZoom();
     }, { passive: false });
-    this._onResize = () => { this.measure(); if (!this.moved) { this.fit(); this.lod(); } };
+    this._onResize = () => { this.measure(); if (!this.moved) { if (this.gridView) this.gridLayout(); else this.fit(); this.lod(); this.render(); } };
     window.addEventListener('resize', this._onResize);
   }
 
@@ -749,7 +750,7 @@ class KG {
     this.renderMeta(n);
     const rel = [...this.adj[id]].map(i => this.byId[i]).sort((a, b) => b.deg - a.deg).slice(0, 12);
     this.$('kg-d-related').innerHTML = rel.map(r => `<span class="kg-chip" data-id="${r.id}" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:#f5f1e8;border:1px solid #e7e2d6;font-size:11.5px;color:#45454d"><span style="width:7px;height:7px;border-radius:50%;background:${r.color}"></span>${this.esc(r.name)}</span>`).join('');
-    const body = this.$('kg-d-body'); body.innerHTML = this.md(n.markdown); body.scrollTop = 0;
+    this.$('kg-d-body').innerHTML = this.md(n.markdown); this.$('kg-d-scroll').scrollTop = 0;
     this.$('kg-drawer').style.transform = 'translateX(0)';
     this.syncNodeListSel();
   }
@@ -807,6 +808,56 @@ class KG {
       const open = body.style.display === 'none';
       body.style.display = open ? '' : 'none';
       btn.style.transform = open ? '' : 'rotate(-90deg)';
+    });
+  }
+
+  // ---- Net | Grid chooser (segmented, by the PAGES list): Net = force layout, Grid = screen-filling rectangular grid. ----
+  bindView() {
+    this.gridView = false;
+    const mark = v => [...this.$('kg-view').children].forEach(b => b.classList.toggle('on', b.dataset.v === v));
+    this.$('kg-view').addEventListener('click', e => {
+      const b = e.target.closest('.kg-gb'); if (!b) return;
+      const grid = b.dataset.v === 'grid';
+      if (grid === this.gridView) return;                                       // no-op when re-clicking the active view
+      this.gridView = grid;
+      if (grid) this.gridLayout(); else { this.restoreForce(); this.fit(); }
+      this.svg.style.opacity = grid ? '0.4' : '';                               // edges step back so labels read clean
+      this.lod(); this.render(); mark(b.dataset.v);
+    });
+    mark('net');                                                                 // force layout is already in place from run()
+  }
+  gridLayout() {
+    const N = this.nodes;
+    const widthOf = n => n.lab.scrollWidth > 0 ? n.lab.scrollWidth : n.name.length * 7.8 + 16;   // real width, text-length fallback
+    const minCellW = Math.max(190, Math.max(...N.map(widthOf)) + 34), minCellH = 80;            // floored by label size -> no overlap
+    const rank = {}; (this.C.order || []).forEach((t, i) => rank[t] = i);
+    const order = [...N].sort((a, b) => a.hero !== b.hero ? (a.hero ? -1 : 1)            // hero first
+      : (rank[a.type] ?? 99) - (rank[b.type] ?? 99)                                      // then group by type
+      || b.deg - a.deg);                                                                 // then by prominence
+    const padL = this.w < 760 ? 60 : 340, padR = 70, padY = 96, effW = Math.max(360, this.w - padL - padR), effH = Math.max(360, this.h - padY * 2);
+    // columns: match the canvas aspect ratio (fills the screen), but never so many that a column drops below label width
+    const cols = Math.max(1, Math.min(Math.floor(effW / minCellW), Math.round(Math.sqrt(N.length * (minCellH / minCellW) * (effW / effH)))));
+    const rows = Math.ceil(N.length / cols);
+    const cellW = Math.max(minCellW, effW / cols), cellH = Math.max(minCellH, effH / rows);      // grow cells to fill the canvas
+    order.forEach((n, i) => {
+      if (n._fbx === undefined) { n._fbx = n.bx; n._fby = n.by; n._famp = n.amp; n._flat = n.labelAt; }  // stash force state once
+      const col = i % cols, row = Math.floor(i / cols);
+      n.x = n.bx = (col - (cols - 1) / 2) * cellW;
+      n.y = n.by = (row - (rows - 1) / 2) * cellH;
+      n.amp = 0; n.labelAt = 0; n.lox = 0; n.loy = n.r + 9; n.lanchor = 'c';             // hold still, label below, always show
+    });
+    this.grid = { cols, rows, cellW, cellH };
+    this.scale = 1;                                                                       // screen-space layout: cells already in screen px, labels unscaled
+    this.tx = padL + effW / 2;                                                            // centred in the canvas area (right of the panel)
+    this.ty = this.h / 2;
+    this._syncZoom();
+  }
+  restoreForce() {
+    this.nodes.forEach(n => { n.x = n.bx = n._fbx; n.y = n.by = n._fby; n.amp = n._famp; n.labelAt = n._flat; });
+    this.nodes.forEach(n => {                                                            // re-fan label anchors outward
+      const dist = Math.hypot(n.x, n.y);
+      if (dist < 55) { n.lox = 0; n.loy = n.r + 9; n.lanchor = 'c'; }
+      else { const cx = n.x / dist, cy = n.y / dist, off = n.r + 7; n.lox = cx * off; n.loy = cy * off; n.lanchor = cx > 0.4 ? 'l' : cx < -0.4 ? 'r' : 'c'; }
     });
   }
 
@@ -903,13 +954,10 @@ class KG {
 
   // ---- zoom + name-density sliders, each with clickable +/- steppers ----
   bindControls() {
-    const z = this.$('kg-zoom'), den = this.$('kg-density');
-    this.density = 0; den.value = 0; z.value = this.scale;
+    const z = this.$('kg-zoom');
+    this.density = 0; z.value = this.scale;
     z.addEventListener('input', () => this.setZoom(parseFloat(z.value)));
     this.$('kg-zoomctl').addEventListener('click', e => { const b = e.target.closest('.kg-step'); if (b) this.setZoom(this.scale * (b.dataset.z === '+' ? 1.12 : 0.893)); });
-    const setDen = v => { this.density = Math.max(0, Math.min(1, Math.round(v * 100) / 100)); den.value = this.density; this.lod(); };
-    den.addEventListener('input', () => setDen(parseFloat(den.value)));
-    this.$('kg-denctl').addEventListener('click', e => { const b = e.target.closest('.kg-step'); if (b) setDen(this.density + (b.dataset.d === '+' ? 0.1 : -0.1)); });
   }
   setZoom(s) {
     s = Math.max(0.4, Math.min(2.6, s));
