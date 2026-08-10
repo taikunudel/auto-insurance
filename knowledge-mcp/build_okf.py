@@ -9,7 +9,7 @@ imports these for its write tools (kb_add, kb_reindex, kb_validate, ...).
 import re
 from pathlib import Path
 
-RESERVED = {"index.md", "log.md", "README.md"}   # reserved files (no frontmatter): catalog, log, GitHub landing page
+RESERVED = {"index.md", "log.md"}            # OKF reserved filenames (carry no frontmatter)
 
 
 def split_frontmatter(text):

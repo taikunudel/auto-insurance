@@ -15,13 +15,13 @@ python server.py --mode read   --registry ~/knowledge-mcp-design/knowledge \
                  --topic auto-insurance-pure-premium-modeling [--version v1]
 ```
 
-Manage mode (look + edit + version, 14 tools). Start it deliberately:
+Manage mode (look + edit + version, 15 tools). Start it deliberately:
 ```
 python server.py --mode manage --registry ~/knowledge-mcp-design/knowledge \
                  --topic auto-insurance-pure-premium-modeling
 ```
 
-In read mode the 9 manage tools are not registered at all, so a read agent cannot see or
+In read mode the 10 manage tools are not registered at all, so a read agent cannot see or
 call them. In read mode the server is pinned to one version and cannot reach the others.
 
 ## The rules gate (manage mode)
@@ -33,7 +33,7 @@ agent can also read the rules at any time with `kb_rules()`.
 
 ---
 
-## The 14 tools
+## The 15 tools
 
 ### 1. kb_index  (read)
 Return the table of contents (`index.md`) for a folder. Empty argument = the top level.
@@ -196,11 +196,11 @@ IN:  kb_versions()
 OUT:
 topic: auto-insurance-pure-premium-modeling  (git repo)
 arms (branches):
-  v1  62c4c30  v1: good wiki (baseline arm)   <- current
-  v2  4ee3a4e  v2: silent-defect arm
-  v3  7e07ce3  v3: stronger-defect arm
+  v1  62c4c30  v1 arm snapshot   <- current
+  v2  4ee3a4e  v2 arm snapshot
+  v3  7e07ce3  v3 arm snapshot
 recent commits on v1:
-  62c4c30 v1: good wiki (baseline arm)
+  62c4c30 v1 arm snapshot
 ```
 
 ### 13. kb_snapshot  (manage)
@@ -228,3 +228,41 @@ current arm: v1 -> v2 (checked out)
 
 [knowledge rules] ...
 ```
+
+### 15. kb_new_topic  (manage)
+Create a NEW topic: a separate git repo beside the current one (or under `--topics-root`).
+Two-phase. Called **without a charter** it creates nothing and returns the interview the
+agent must run with you (materials available, purpose & consumers, scope, folder plan):
+```
+IN:  kb_new_topic(name="ios-app-design")
+OUT:
+STOP — nothing was created. A new topic needs a charter agreed with the USER first.
+Interview the user now; do NOT invent the answers yourself:
+  1. materials — what does the user have available (papers, repos, datasets, notes,
+     run logs, URLs)?
+  2. purpose & consumers — which agents/tasks will read this wiki, and to do what?
+  3. scope — what is in, what is out?
+  4. structure — folder plan (default: concepts, entities, sources, examples;
+     override with `folders`).
+...
+```
+Called **with the agreed charter** it scaffolds the repo (branch `v1`, initial commit), embeds
+the charter in `overview.md`, and returns a ready-to-paste MCP config for the new topic:
+```
+IN:  kb_new_topic(name="ios-app-design",
+                  charter="Purpose: HIG-grounded design wiki for the iOS agent. Materials: ...",
+                  folders="concepts,sources,examples")
+OUT:
+created topic 'ios-app-design' at /home/you/knowledge-mcp-design/ios-app-design
+  git repo, branch v1, commit 3f9c21a
+  seeded: overview.md (charter embedded), log.md, index.md, folders: concepts, sources, examples
+  NOTE: this server stays bound to topic 'knowledge'; the new topic needs its own server:
+    manage: $HOME/knowledge-mcp-design/knowledge-mcp/start.sh --mode manage --registry $HOME/knowledge-mcp-design/ios-app-design
+  read-mode MCP config snippet:
+{ "mcpServers": { "knowledge-ios-app-design": { ... } } }
+
+[knowledge rules] ...
+```
+Guards: slug-only names, refuses if the folder exists, refuses a charter under 80 chars
+(a real charter records the user's answers). The current server never switches to the new
+topic — launch a separate server for it.

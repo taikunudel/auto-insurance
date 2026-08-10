@@ -6,10 +6,10 @@ Position in the project: the bridge between the knowledge (`knowledge/`) and the
 
 ## Two modes (one program, one flag)
 - **read** 5 tools (`kb_index`, `kb_list`, `kb_get`, `kb_grep`, `kb_rules`), pinned to one version, read-only. This is what a benchmark run uses.
-- **manage** all 14 tools (adds create / edit / delete / validate and version control). Started on purpose, to maintain the base.
+- **manage** all 15 tools (adds create / edit / delete / validate, version control, and `kb_new_topic` — new-topic creation gated on a charter agreed with the user). Started on purpose, to maintain the base.
 
 ## Files
-- `server.py` the server (both modes, 14 tools, rules gate, traversal guard, access log)
+- `server.py` the server (both modes, 15 tools, rules gate, traversal guard, access log)
 - `start.sh` self-locating launcher: `./start.sh --mode read`
 - `mcp.read.json` / `mcp.manage.json` configs telling a client how to start it
 - `AGENT_RULES.md` the rulebook the server hands every agent (also via `kb_rules()`)

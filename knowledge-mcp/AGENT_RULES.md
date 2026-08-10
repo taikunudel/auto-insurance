@@ -48,10 +48,8 @@ node, without exception, obeys these four invariants:
 3. **It MAY contain subfolders.** Each subfolder is itself a node and **MUST obey all of
    these same invariants** (its own `index.md`, its own knowledge documents, its own
    subfolders). The rule is recursive: it applies at every depth, all the way down.
-4. **Reserved filenames are `index.md`, `log.md`, and `README.md`.** They are never knowledge
-   documents and never carry frontmatter. `log.md` (optional) records this node's change
-   history; `README.md` (optional, root only by convention) is the bundle's human-facing
-   landing page (e.g. on GitHub).
+4. **Reserved filenames are `index.md` and `log.md`.** They are never knowledge documents
+   and never carry frontmatter. `log.md` (optional) records this node's change history.
 
 Said plainly: pick any folder in the KB, at any depth, and it looks the same. One
 `index.md`, zero or more knowledge `.md` files, zero or more subfolders that each look the
@@ -199,8 +197,8 @@ language: en
 ## 5. Versions and topics (optional, for multi-version / multi-topic use)
 
 - A **topic** is one KB, stored as a git repo. Different topics are different repos.
-- The **arms/versions** are git branches (here `v1` good, `v2` silent-defect, `v3` stronger-
-  defect); the history is the git log. A published commit is immutable: it is content-addressed
+- The **arms/versions** are git branches (here `v1`, `v2`, and `v3`); the history is the
+  git log. A published commit is immutable: it is content-addressed
   and never changes, so an old version is always recoverable by its commit id.
 - To change a KB, edit the working tree and commit (`kb_snapshot`). The commit is a new point
   in that arm's history; earlier commits are untouched. Start a parallel arm by branching.
@@ -208,3 +206,8 @@ language: en
   it to a single commit at startup and serves only that commit, so the reader cannot reach other
   arms and cannot see later commits. Switch arms by relaunching with a different ref, never by
   editing files under a running reader.
+- A NEW topic is created only with `kb_new_topic`, and only after a **charter** — materials
+  available, purpose & consumers, scope, folder structure — has been agreed with the USER in
+  conversation. Calling it without a charter returns the interview to run; **never invent the
+  charter yourself.** The agreed charter is written into the new topic's `overview.md`. The
+  server you are on stays bound to its own topic; the new topic is served by its own server.

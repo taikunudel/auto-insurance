@@ -6,6 +6,7 @@ Self-locating. Read mode serves a frozen commit (v1). Manage runs on a THROWAWAY
 records the v1/v2/v3 commit ids before and after and asserts they are unchanged.
 """
 import asyncio
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,12 +19,13 @@ REG = str(HERE.parent / "knowledge")              # sibling knowledge repo (flat
 TOPIC = "knowledge"
 REPO = Path(REG)
 WORK = "_smoketest"        # throwaway branch the write/version tests use
+TOPICS = Path("/tmp/kb-smoke-topics")             # throwaway topics-root for kb_new_topic
 PY = sys.executable
 
 READ_TOOLS = {"kb_index", "kb_list", "kb_get", "kb_grep", "kb_rules"}
 MANAGE_TOOLS = READ_TOOLS | {"kb_add", "kb_update", "kb_remove", "kb_new_folder",
                              "kb_reindex", "kb_validate", "kb_versions",
-                             "kb_snapshot", "kb_set_current"}
+                             "kb_snapshot", "kb_set_current", "kb_new_topic"}
 
 
 def git(*a):
@@ -34,11 +36,12 @@ def sha(ref):
     return git("rev-parse", ref).stdout.strip()
 
 
-def params(mode, version=None):
+def params(mode, version=None, extra=()):
     args = [str(HERE / "server.py"), "--mode", mode, "--registry", REG,
             "--topic", TOPIC, "--log-dir", "/tmp/kb-smoke"]
     if version:
         args += ["--version", version]
+    args += list(extra)
     return StdioServerParameters(command=PY, args=args)
 
 
@@ -77,8 +80,13 @@ async def read_checks():
             print("traversal guard blocks ../../../etc/passwd  OK")
 
 
+CHARTER = ("Purpose: smoke-test wiki for the kb_new_topic tool. Materials: none, this is a "
+           "test. Consumers: smoke_test.py only. Scope: prove scaffolding works; nothing else.")
+
+
 async def manage_checks():
-    async with stdio_client(params("manage", WORK)) as (r, w):   # edits the throwaway branch
+    async with stdio_client(params("manage", WORK,
+                                   extra=["--topics-root", str(TOPICS)])) as (r, w):
         async with ClientSession(r, w) as s:
             await s.initialize()
             tools = {t.name for t in (await s.list_tools()).tools}
@@ -121,16 +129,65 @@ async def manage_checks():
             await text(s, "kb_set_current", {"ref": WORK})  # switch back so cleanup is simple
             print("kb_set_current: switched arms and back  OK")
 
+            # -- kb_new_topic: phase 1 (interview) creates nothing --------------------
+            iv = await text(s, "kb_new_topic", {"name": "smoke-topic"})
+            assert iv.startswith("STOP") and "charter" in iv, iv
+            assert not (TOPICS / "smoke-topic").exists(), "interview phase must not create"
+            print("kb_new_topic: no charter -> interview script, nothing created  OK")
+
+            bad = await text(s, "kb_new_topic", {"name": "Bad Name!", "charter": CHARTER})
+            assert bad.startswith("ERROR") and "slug" in bad, bad
+            thin = await text(s, "kb_new_topic", {"name": "smoke-topic", "charter": "too short"})
+            assert thin.startswith("ERROR") and "too thin" in thin, thin
+            print("kb_new_topic: bad slug and thin charter both rejected  OK")
+
+            # -- kb_new_topic: phase 2 (charter) scaffolds a servable repo ------------
+            made = await text(s, "kb_new_topic", {"name": "smoke-topic", "charter": CHARTER,
+                                                  "folders": "concepts,sources"})
+            assert made.startswith("created topic 'smoke-topic'"), made
+            nt = TOPICS / "smoke-topic"
+            head = subprocess.run(["git", "-C", str(nt), "rev-parse", "--abbrev-ref", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+            assert head == "v1", f"new repo not on v1: {head!r}"
+            for f in ("index.md", "log.md", "overview.md",
+                      "concepts/index.md", "sources/index.md"):
+                assert (nt / f).is_file(), f"missing {f}"
+            assert CHARTER in (nt / "overview.md").read_text(), "charter not embedded"
+            print("kb_new_topic: repo on v1, all seed files present, charter embedded  OK")
+
+            dup = await text(s, "kb_new_topic", {"name": "smoke-topic", "charter": CHARTER})
+            assert dup.startswith("ERROR") and "already exists" in dup, dup
+            print("kb_new_topic: duplicate name rejected  OK")
+
+
+async def new_topic_serve_checks():
+    """The created topic must be servable by its own read server (flat-repo detection)."""
+    sp = StdioServerParameters(command=PY, args=[str(HERE / "server.py"), "--mode", "read",
+                                                 "--registry", str(TOPICS / "smoke-topic"),
+                                                 "--log-dir", "/tmp/kb-smoke"])
+    async with stdio_client(sp) as (r, w):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            tools = {t.name for t in (await s.list_tools()).tools}
+            assert tools == READ_TOOLS, f"new-topic read tools wrong: {sorted(tools)}"
+            ov = await text(s, "kb_get", {"page_id": "overview.md"})
+            assert CHARTER in ov, "served overview.md lacks the charter"
+            idx = await text(s, "kb_index")
+            assert "overview" in idx.lower(), f"root index not a catalog: {idx[:80]}"
+            print("new topic served read-only by its own server; charter readable  OK")
+
 
 def setup():
     git("checkout", "-q", "v1")
     git("branch", "-D", WORK)              # ignore error if absent
     git("branch", WORK, "v1")             # fresh throwaway branch from v1
+    shutil.rmtree(TOPICS, ignore_errors=True)
 
 
 def cleanup():
     git("checkout", "-q", "v1")
     git("branch", "-D", WORK)
+    shutil.rmtree(TOPICS, ignore_errors=True)
 
 
 async def main():
@@ -139,6 +196,8 @@ async def main():
     await read_checks()
     print()
     await manage_checks()
+    print()
+    await new_topic_serve_checks()
     cleanup()
     after = {b: sha(b) for b in ("v1", "v2", "v3")}
     assert before == after, f"IMMUTABILITY FAILED: {before} -> {after}"

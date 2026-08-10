@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """knowledge-mcp server: one server, two modes (read | manage) over a git-backed OKF wiki.
 
-The knowledge of a topic is a git repo at <registry>/<topic>/repo/. The arms are branches
-(v1 good, v2 silent-defect, v3 stronger-defect).
+The knowledge of a topic is a git repo at <registry>/<topic>/repo/. The arms are versioned
+branches (`v1`, `v2`, and `v3`).
 
 read mode    : 5 read tools, pinned to ONE commit, content served from git, read-only.
                At startup the requested ref (--version, default the repo's current branch)
                is resolved to a commit id; the server serves that commit for its whole life,
                so a run stays frozen even while a manager keeps committing.
-manage mode  : all 14 tools. Checks out one arm and edits the WORKING TREE; kb_snapshot
-               commits (a new immutable point); earlier commits never change.
+manage mode  : all 15 tools. Checks out one arm and edits the WORKING TREE; kb_snapshot
+               commits (a new immutable point); earlier commits never change. kb_new_topic
+               creates a NEW topic (a separate repo under --topics-root, default the current
+               repo's parent) — but only with a charter agreed with the user first.
 
 The rules (AGENT_RULES.md) ship as the FastMCP `instructions` and via kb_rules(). The manage
 tools gate on the rules: the first manage call returns the rulebook and asks the agent to retry.
@@ -18,12 +20,6 @@ Launch:
   server.py --mode read   --registry ~/knowledge --topic <t> [--version v1|v2|v3|<ref>]
   server.py --mode manage --registry ~/knowledge --topic <t> [--version <arm>]
   server.py --root <path>                      # serve a plain folder directly (read mode)
-
-Multi-topic: point --registry at a folder of topic repos and omit --topic. The server then
-holds them all; the first read tool returns a topic catalog and the agent (or user) picks one
-with kb_select_topic() before content is served (the "topic gate"). Passing --topic pins one
-topic at launch and skips the gate (reproducible). --select auto|manual chooses who picks and
---dynamic on|off controls whether new topics are seen live; see the args below.
 """
 from __future__ import annotations
 
@@ -44,10 +40,6 @@ from mcp.server.fastmcp import FastMCP
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_okf import (split_frontmatter, fm_keys, gen_index,
                        title_from, RESERVED)  # noqa: E402
-try:                                  # optional view layer: a graph.html regenerated on each edit
-    from graph import write_graph as _write_graph  # noqa: E402
-except Exception:                     # a broken/absent view must never stop the server
-    _write_graph = None
 
 # --- args ----------------------------------------------------------------------------
 ap = argparse.ArgumentParser(description="knowledge-mcp server (stdio).")
@@ -58,15 +50,11 @@ ap.add_argument("--version", default=None,
                 help="read: ref/branch/commit to serve (default the repo's current branch); "
                      "manage: the arm (branch) to edit.")
 ap.add_argument("--root", default=None, help="serve exactly this folder (read mode); bypasses git.")
+ap.add_argument("--topics-root", default=None,
+                help="manage: where kb_new_topic creates new topic repos "
+                     "(default: the parent folder of the current repo).")
 ap.add_argument("--log-dir", default=None)
 ap.add_argument("--name", default="knowledge")
-ap.add_argument("--select", choices=["auto", "manual"], default="auto",
-                help="multi-topic: how the first read picks a topic. auto = the agent chooses "
-                     "from the catalog; manual = the agent asks the user. Ignored when --topic "
-                     "pins one topic or only one exists.")
-ap.add_argument("--dynamic", choices=["on", "off"], default="on",
-                help="on = re-scan the registry for topics on each call (new topics appear "
-                     "live); off = freeze the topic list at startup (reproducible).")
 ARGS = ap.parse_args()
 
 
@@ -78,166 +66,72 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# --- resolve registry; topics are discovered, one is activated at startup or via the gate ---
+# --- resolve registry / topic / repo (self-locating; rule 7) -------------------------
 # Default the registry to the sibling `knowledge/` folder so the server works wherever the
-# whole tree lives, with no absolute path needed. The registry may BE a single repo (flat
-# layout) or a parent folder holding several topic repos.
+# whole knowledge-mcp-design/ tree lives, with no absolute path needed.
 _DEFAULT_REGISTRY = Path(__file__).resolve().parents[1] / "knowledge"
 REGISTRY = (Path(ARGS.registry).expanduser().resolve() if ARGS.registry
             else (_DEFAULT_REGISTRY if _DEFAULT_REGISTRY.is_dir() else None))
-
-# Active serving context — set by _activate_topic()/_activate_root(), possibly only after the
-# first read call hits the topic gate. stdio means one process per session, so these module
-# globals ARE this session's state (no cross-session bleed to worry about).
 TOPIC = ARGS.topic
-REPO = None              # active topic's git repo
-SHA = None               # frozen commit served in read mode
-ACTIVE_ROOT = None       # the repo (git) or a plain folder (--root); also the "is a topic active?" flag
-READ_FROM_GIT = False
-VERSION_LABEL = None
-_ACTIVE_TOPIC = None     # selected topic name, or None while the gate is still open
-_TOPICS_CACHE = None     # topic discovery cache for --dynamic off
-
-# Layout flags. A flat registry (the registry IS one repo) or a pinned --topic is a single,
-# fixed topic: no gate, no selection tools, read surface stays at the original 5. Only a
-# registry-of-topics with no pin is "multi-capable": it gets kb_topics()/kb_select_topic()
-# and the first-read gate. Pinning (--topic) is exactly what keeps a benchmark run reproducible.
-_FLAT = bool(REGISTRY and (REGISTRY / ".git").is_dir())
-_MULTI_CAPABLE = bool(REGISTRY) and not _FLAT and not ARGS.root and not ARGS.topic
-
-
-def _git_in(repo, *a) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+# The knowledge base is a git repo, found two ways: the registry path may BE the repo
+# (flat: the OKF bundle sits at the repo root), or the legacy layout <registry>/<topic>/repo/.
+REPO = None
+if REGISTRY and (REGISTRY / ".git").is_dir():
+    REPO = REGISTRY
+    TOPIC = TOPIC or REGISTRY.name
+elif REGISTRY and not ARGS.root:
+    if not TOPIC:
+        _topics = [d.name for d in REGISTRY.iterdir() if d.is_dir()]
+        if len(_topics) == 1:          # exactly one topic: use it without being told
+            TOPIC = _topics[0]
+    _td = (REGISTRY / TOPIC) if TOPIC else None
+    if _td and (_td / "repo" / ".git").is_dir():
+        REPO = _td / "repo"
+if REPO and shutil.which("git") is None:    # doctor: fail loudly, do not limp on
+    _die("git is required to serve the knowledge repo but was not found on PATH. Install git.")
 
 
 def _git(*a) -> subprocess.CompletedProcess:
-    return _git_in(REPO, *a)
+    return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True)
 
 
-def _default_branch_of(repo) -> str:
-    r = _git_in(repo, "rev-parse", "--abbrev-ref", "HEAD")
+def _default_branch() -> str:
+    r = _git("rev-parse", "--abbrev-ref", "HEAD")
     return r.stdout.strip() if r.returncode == 0 else "v1"
 
 
-# --- topic discovery + activation + the selection gate -------------------------------
-# A "topic" is one knowledge base = one git repo. The registry holds zero or more of them.
-# One topic is made active before any content is served: at startup when there is no choice
-# (flat repo, a single topic, or --topic pins one), otherwise lazily on the first read call,
-# which returns a catalog and asks for kb_select_topic() instead of leaking every topic.
-def _topic_repo(d: Path):
-    """The git repo for a topic dir: <topic>/repo/ (legacy layout) or <topic>/ itself, else None."""
-    if (d / "repo" / ".git").is_dir():
-        return d / "repo"
-    if (d / ".git").is_dir():
-        return d
-    return None
-
-
-def _discover_topics() -> dict:
-    """Map topic-name -> repo Path. A flat registry (the registry IS a repo) is one topic."""
-    if not REGISTRY:
-        return {}
-    if (REGISTRY / ".git").is_dir():
-        return {REGISTRY.name: REGISTRY}
-    out = {}
-    for d in sorted(REGISTRY.iterdir()):
-        if d.is_dir():
-            r = _topic_repo(d)
-            if r:
-                out[d.name] = r
-    return out
-
-
-def _topics_now() -> dict:
-    """Current topics, honouring --dynamic (on: re-scan each call; off: frozen at first scan)."""
-    global _TOPICS_CACHE
-    if ARGS.dynamic == "off":
-        if _TOPICS_CACHE is None:
-            _TOPICS_CACHE = _discover_topics()
-        return _TOPICS_CACHE
-    return _discover_topics()
-
-
-def _topic_desc(repo) -> str:
-    """First non-heading line of a topic's index.md, used as its one-line catalog description."""
-    ref = ARGS.version or _default_branch_of(repo)
-    r = _git_in(repo, "show", f"{ref}:index.md")
-    if r.returncode:
-        return ""
-    for ln in r.stdout.splitlines():
-        s = ln.strip()
-        if s and not s.startswith("#"):
-            return s
-    return ""
-
-
-def _topics_catalog() -> str:
-    topics = _topics_now()
-    lines = [f"{len(topics)} topic(s) available (choose with kb_select_topic(<name>)):"]
-    for name, repo in topics.items():
-        d = _topic_desc(repo)
-        lines.append(f"  - {name}" + (f" — {d}" if d else ""))
-    return "\n".join(lines)
-
-
-def _activate_root() -> str | None:
-    """Activate --root: serve a plain folder directly (no git, single topic)."""
-    global ACTIVE_ROOT, READ_FROM_GIT, VERSION_LABEL, TOPIC, _ACTIVE_TOPIC
-    root = Path(ARGS.root).expanduser().resolve()
-    if not root.is_dir():
-        return f"--root not a folder: {root}"
-    ACTIVE_ROOT, READ_FROM_GIT, VERSION_LABEL = root, False, root.name
-    TOPIC = TOPIC or root.name
-    _ACTIVE_TOPIC = TOPIC
-    return None
-
-
-def _activate_topic(name: str) -> str | None:
-    """Make `name` the active topic: resolve its commit (read) or check out its arm (manage).
-    Returns an error string on failure, else None. Re-callable to switch topics mid-session."""
-    global REPO, TOPIC, SHA, ACTIVE_ROOT, READ_FROM_GIT, VERSION_LABEL, _ACTIVE_TOPIC
-    repo = _topics_now().get(name)
-    if repo is None:
-        return f"ERROR: no such topic '{name}'. Call kb_topics() for the list."
-    ref = ARGS.version or _default_branch_of(repo)
+# Decide where content comes from: a frozen commit (read+git), or a directory (manage / --root).
+SHA = None
+if ARGS.root:
+    ACTIVE_ROOT = Path(ARGS.root).expanduser().resolve()
+    if not ACTIVE_ROOT.is_dir():
+        _die(f"--root not a folder: {ACTIVE_ROOT}")
+    READ_FROM_GIT = False
+    VERSION_LABEL = ACTIVE_ROOT.name
+elif REPO:
+    REF = ARGS.version or _default_branch()
     if ARGS.mode == "read":
-        rp = _git_in(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+        rp = _git("rev-parse", "--verify", f"{REF}^{{commit}}")
         if rp.returncode:
-            return f"ERROR: no such version/ref '{ref}' in topic '{name}'."
-        REPO, TOPIC, SHA = repo, name, rp.stdout.strip()
-        READ_FROM_GIT, ACTIVE_ROOT, VERSION_LABEL = True, repo, ref
+            _die(f"no such version/ref '{REF}' in the repo")
+        SHA = rp.stdout.strip()
+        READ_FROM_GIT = True
+        ACTIVE_ROOT = REPO          # used only for logging label; content comes from SHA
+        VERSION_LABEL = REF
     else:                            # manage: check out the arm and edit its working tree
-        co = _git_in(repo, "checkout", ref)
+        co = _git("checkout", REF)
         if co.returncode:
-            return f"ERROR: manage: cannot check out '{ref}' in topic '{name}': {co.stderr.strip()}"
-        REPO, TOPIC, SHA = repo, name, None
-        READ_FROM_GIT, ACTIVE_ROOT, VERSION_LABEL = False, repo, ref
-    _ACTIVE_TOPIC = name
-    _log("topic_activate", selected=name, ref=ref)
-    return None
+            _die(f"manage: cannot check out arm '{REF}' (uncommitted changes?): {co.stderr.strip()}")
+        READ_FROM_GIT = False
+        ACTIVE_ROOT = REPO
+        VERSION_LABEL = REF
+else:
+    _die("need --root, or a git repo at <topic>/repo/ (run the migration), "
+         "or both --registry and --topic")
 
-
-_SELECT_HINT = {
-    "auto": "Read the catalog below, pick the one topic that matches the user's task, and call "
-            "kb_select_topic(<name>). If none clearly fits, ask the user before guessing.",
-    "manual": "Ask the user which topic to use, then call kb_select_topic(<name>).",
-}
-
-
-def _topic_gate():
-    """Read-tool gate. Returns None when a topic is active (proceed). Otherwise returns the
-    catalog plus a hint, so no content is served until kb_select_topic resolves the choice.
-    Idempotent: every pre-selection read returns the same catalog, never partial content."""
-    if ACTIVE_ROOT is not None:
-        return None
-    topics = _topics_now()
-    if not topics:
-        return "ERROR: no topics found. Point --registry at a knowledge repo or a registry of topics."
-    if len(topics) == 1:                       # no choice to make: activate silently
-        return _activate_topic(next(iter(topics)))
-    _log("topic_gate", n_topics=len(topics))
-    return ("SELECT A TOPIC before reading. " + _SELECT_HINT.get(ARGS.select, _SELECT_HINT["auto"])
-            + "\n\n" + _topics_catalog())
+# Where kb_new_topic creates NEW topic repos: --topics-root, else beside the current repo.
+TOPICS_ROOT = (Path(ARGS.topics_root).expanduser().resolve() if ARGS.topics_root
+               else (REPO.parent if REPO else ACTIVE_ROOT.parent))
 
 # --- access log ----------------------------------------------------------------------
 LOG_DIR = (Path(ARGS.log_dir).expanduser().resolve() if ARGS.log_dir
@@ -256,31 +150,6 @@ def _log(tool: str, **fields):
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:  # logging must never break a tool
         pass
-
-
-# --- decide the active context now, or defer to the topic gate -----------------------
-if ARGS.root:
-    _e = _activate_root()
-    if _e:
-        _die(_e)
-else:
-    if shutil.which("git") is None:            # doctor: fail loudly, do not limp on
-        _die("git is required to serve a knowledge repo but was not found on PATH. Install git.")
-    _t0 = _topics_now()
-    if not _t0:
-        _die("need --root, or --registry pointing at a knowledge repo / a registry of topics.")
-    if ARGS.topic:                             # pinned at launch -> the gate is a no-op
-        _e = _activate_topic(ARGS.topic)
-        if _e:
-            _die(_e)
-    elif len(_t0) == 1:                        # only one topic -> activate it, no gate
-        _e = _activate_topic(next(iter(_t0)))
-        if _e:
-            _die(_e)
-    elif ARGS.mode == "manage":                # editing needs an explicit target topic
-        _die(f"manage mode needs --topic to choose which topic to edit "
-             f"(found {len(_t0)}: {', '.join(_t0)}).")
-    # else: read mode, multiple topics, no --topic -> stay inactive; first read hits the gate
 
 
 # --- content access: mode-aware (frozen commit for read+git, else the directory) ------
@@ -355,25 +224,13 @@ def _gate():
             "Then call your tool again.\n\n" + RULES_TEXT)
 
 
-# When several topics are live (none pinned), tell the agent up front that the first read
-# returns a catalog and a topic must be selected. (The rulebook itself stays topic-agnostic,
-# so this note only goes into the connect-time instructions, not into kb_rules() output.)
-_MULTI = _ACTIVE_TOPIC is None
-INSTRUCTIONS = RULES_TEXT + (
-    "\n\n[topics] This server hosts several knowledge bases (topics). The first read tool you "
-    "call returns a topic catalog instead of content; choose one with kb_select_topic(<name>) "
-    "(or call kb_topics() first), then read. Select again to switch topics."
-    if _MULTI else "")
-mcp = FastMCP(ARGS.name, instructions=INSTRUCTIONS)
+mcp = FastMCP(ARGS.name, instructions=RULES_TEXT)
 
 
 # ============================ READ TOOLS (always registered) =========================
 @mcp.tool()
 def kb_index(folder: str = "") -> str:
     """Return the table of contents (index.md) for a folder. Empty argument means the top level."""
-    g = _topic_gate()
-    if g is not None:
-        return g
     try:
         rel = _norm_pid(folder) if folder.strip() else ""
     except ValueError as e:
@@ -386,9 +243,6 @@ def kb_index(folder: str = "") -> str:
 @mcp.tool()
 def kb_list() -> str:
     """List the path (page_id) of every page in the knowledge base, one per line."""
-    g = _topic_gate()
-    if g is not None:
-        return g
     pages = _pages()
     _log("kb_list", n_pages=len(pages))
     return "\n".join(pages)
@@ -397,9 +251,6 @@ def kb_list() -> str:
 @mcp.tool()
 def kb_get(page_id: str) -> str:
     """Return the full raw markdown of one page, identified by its path relative to the root."""
-    g = _topic_gate()
-    if g is not None:
-        return g
     try:
         pid = _norm_pid(page_id)
     except ValueError as e:
@@ -414,9 +265,6 @@ def kb_get(page_id: str) -> str:
 @mcp.tool()
 def kb_grep(query: str, max_results: int = 50) -> str:
     """Search every page for a term (case-insensitive regex, literal fallback). Returns 'page_id:line: text'."""
-    g = _topic_gate()
-    if g is not None:
-        return g
     try:
         rx = re.compile(query, re.IGNORECASE)
     except re.error:
@@ -451,45 +299,12 @@ def kb_rules() -> str:
     return RULES_TEXT
 
 
-# Topic navigation tools — registered ONLY for a multi-topic registry with no pin. A flat or
-# pinned single-topic server never shows these, so its read surface stays at the original 5.
-if _MULTI_CAPABLE:
-
-    @mcp.tool()
-    def kb_topics() -> str:
-        """List the topics (knowledge bases) this server can serve, one per line with a short
-        description. Call kb_select_topic(name) before the read tools will return content."""
-        _log("kb_topics")
-        return _topics_catalog()
-
-    @mcp.tool()
-    def kb_select_topic(name: str) -> str:
-        """Choose which topic (knowledge base) the read tools serve for this session. Required
-        once when the server hosts multiple topics; call again to switch. Names from kb_topics()."""
-        err = _activate_topic(name.strip())
-        if err:
-            return err
-        return (f"active topic: {TOPIC} (version {VERSION_LABEL}"
-                + (f", commit {SHA[:12]}" if SHA else "")
-                + "). Read tools now serve this topic only; select again to switch.")
-
-
 # ============================ MANAGE TOOLS (manage mode only) =========================
 if ARGS.mode == "manage":
 
     def _append_log(msg: str):
         with (ACTIVE_ROOT / "log.md").open("a", encoding="utf-8") as fh:
             fh.write(f"- {_now()} {msg}\n")
-
-    def _regen_graph():
-        """Regenerate <root>/graph.html so the visual view tracks every edit. Never raises:
-        a view bug must not break a knowledge write (mirrors how _log swallows errors)."""
-        if _write_graph is None:
-            return
-        try:
-            _write_graph(ACTIVE_ROOT)
-        except Exception:
-            pass
 
     def _bundle_dirs():
         return [ACTIVE_ROOT] + [d for d in ACTIVE_ROOT.rglob("*")
@@ -551,7 +366,6 @@ if ARGS.mode == "manage":
         gen_index(p.parent)
         _append_log(f"add {page_id}")
         _log("kb_add", page_id=page_id)
-        _regen_graph()
         return (f"added {page_id} (working tree, uncommitted)\n"
                 f"  frontmatter: type={type.strip()}, title=\"{ttl}\", status=draft, version=1, created={ts}\n"
                 f"  parent index rebuilt: {Path(page_id).parent}/index.md\n"
@@ -594,7 +408,6 @@ if ARGS.mode == "manage":
                      encoding="utf-8")
         _append_log(f"update {page_id}" + (f" ({note})" if note else ""))
         _log("kb_update", page_id=page_id)
-        _regen_graph()
         return (f"updated {page_id}\n  version -> {ver}\n  updated: {_now()}\n  log appended") + RULES_REMINDER
 
     @mcp.tool()
@@ -615,7 +428,6 @@ if ARGS.mode == "manage":
         gen_index(p.parent)
         _append_log(f"remove {page_id}")
         _log("kb_remove", page_id=page_id)
-        _regen_graph()
         return (f"removed {page_id}\n  parent index rebuilt: {Path(page_id).parent}/index.md\n  log appended") + RULES_REMINDER
 
     @mcp.tool()
@@ -634,7 +446,6 @@ if ARGS.mode == "manage":
                            else f"# {d.name.replace('-', ' ').title()}\n", encoding="utf-8")
         gen_index(d.parent)
         _log("kb_new_folder", path=path)
-        _regen_graph()
         return (f"created {path}/\n  wrote {path}/index.md\n  parent index updated") + RULES_REMINDER
 
     @mcp.tool()
@@ -646,7 +457,6 @@ if ARGS.mode == "manage":
         d = (ACTIVE_ROOT / folder.strip().strip("/")) if folder else ACTIVE_ROOT
         n = gen_index(d) or 0
         _log("kb_reindex", folder=folder, entries=n)
-        _regen_graph()
         return (f"rebuilt {folder or '.'}/index.md ({n} entries)") + RULES_REMINDER
 
     @mcp.tool()
@@ -691,7 +501,6 @@ if ARGS.mode == "manage":
             return g
         if not message.strip():
             return "ERROR: a snapshot needs a message describing the change."
-        _regen_graph()                # ensure the committed snapshot carries a current graph.html
         _git("add", "-A")
         c = _git("commit", "-m", message.strip())
         if "nothing to commit" in (c.stdout + c.stderr):
@@ -719,16 +528,109 @@ if ARGS.mode == "manage":
             return (f"ERROR: cannot switch to '{ref}' (uncommitted changes? snapshot or discard first). "
                     f"git said: {co.stderr.strip()}")
         _log("kb_set_current", old=old, new=ref)
-        _regen_graph()                # the working tree now points at a different arm; refresh the view
         return (f"current arm: {old} -> {ref} (checked out)\n"
                 f"  read servers started now default to {ref}\n"
                 f"  already-running read servers keep their pinned commit") + RULES_REMINDER
 
+    _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+    _INTERVIEW = (
+        "STOP — nothing was created. A new topic needs a charter agreed with the USER first.\n"
+        "Interview the user now; do NOT invent the answers yourself:\n"
+        "  1. materials — what does the user have available (papers, repos, datasets, notes,\n"
+        "     run logs, URLs)?\n"
+        "  2. purpose & consumers — which agents/tasks will read this wiki, and to do what?\n"
+        "  3. scope — what is in, what is out?\n"
+        "  4. structure — folder plan (default: concepts, entities, sources, examples;\n"
+        "     override with `folders`).\n"
+        "Distil the user's answers into a short charter, then call\n"
+        "  kb_new_topic(name='{name}', charter=<the distilled answers>[, folders='a,b,c'])\n"
+        "The charter is written into the new topic's overview.md, so the agreement is durable."
+    )
+
+    def _tgit(target: Path, *a) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(target), *a], capture_output=True, text=True)
+
+    def _portable(p: Path) -> str:
+        """Render a path with $HOME instead of the literal home dir (rule 7: portable configs)."""
+        s, home = str(p), str(Path.home())
+        return s.replace(home, "$HOME", 1) if s.startswith(home + os.sep) else s
+
+    @mcp.tool()
+    def kb_new_topic(name: str, charter: str = "",
+                     folders: str = "concepts,entities,sources,examples") -> str:
+        """Create a NEW topic (a separate git repo beside this one) after a charter is agreed with the user. Call it without `charter` first: it returns the interview to run with the user. Never write the charter yourself; it must record the USER's answers."""
+        g = _gate()
+        if g is not None:
+            return g
+        slug = name.strip().lower()
+        if not _SLUG_RE.match(slug):
+            return (f"ERROR: topic name must be a slug (lowercase letters/digits/dashes, "
+                    f"starting alphanumeric); got {name!r}.")
+        target = (TOPICS_ROOT / slug).resolve()
+        if not target.is_relative_to(TOPICS_ROOT):
+            return f"ERROR: topic path escapes the topics root: {name!r}"
+        if target.exists():
+            return f"ERROR: {target} already exists; pick another name."
+        if not charter.strip():
+            _log("kb_new_topic", name=slug, phase="interview")
+            return _INTERVIEW.format(name=slug)
+        if len(charter.strip()) < 80:
+            return ("ERROR: charter too thin. It must record the user's actual answers "
+                    "(materials, purpose & consumers, scope). Interview the user, then retry.")
+        subdirs = [s.strip() for s in folders.split(",") if s.strip()]
+        bad = [s for s in subdirs if not _SLUG_RE.match(s)]
+        if bad:
+            return f"ERROR: bad folder name(s): {', '.join(bad)} (slugs only)."
+        ts = _now()
+        ttl = slug.replace("-", " ").title()
+        target.mkdir(parents=True)
+        (target / "log.md").write_text(f"- {ts} topic created; charter agreed with the user\n",
+                                       encoding="utf-8")
+        (target / "overview.md").write_text(
+            "---\n"
+            "type: overview\n"
+            f'title: "Overview — {ttl}"\n'
+            "status: draft\nversion: 1\n"
+            f"created: {ts}\nupdated: {ts}\n"
+            "---\n\n"
+            f"# {ttl}\n\n## Charter (agreed with the user)\n\n{charter.strip()}\n",
+            encoding="utf-8")
+        for s in subdirs:
+            d = target / s
+            d.mkdir()
+            (d / "index.md").write_text(f"# {s.replace('-', ' ').title()}\n", encoding="utf-8")
+        gen_index(target)
+        for cmd in (("init", "-b", "v1"), ("add", "-A")):
+            r = _tgit(target, *cmd)
+            if r.returncode:
+                return f"ERROR: git {' '.join(cmd)} failed: {(r.stdout + r.stderr).strip()}"
+        ident = ([] if _tgit(target, "config", "user.email").stdout.strip()
+                 else ["-c", "user.name=knowledge-mcp", "-c", "user.email=knowledge-mcp@localhost"])
+        r = subprocess.run(["git", "-C", str(target), *ident, "commit", "-m",
+                            f"init {slug} wiki (charter agreed with user)"],
+                           capture_output=True, text=True)
+        if r.returncode:
+            return f"ERROR: git commit failed: {(r.stdout + r.stderr).strip()}"
+        sha = _tgit(target, "rev-parse", "--short", "HEAD").stdout.strip()
+        _log("kb_new_topic", name=slug, phase="created", path=str(target), commit=sha,
+             folders=subdirs)
+        start = Path(__file__).resolve().parent / "start.sh"
+        cfg = json.dumps({"mcpServers": {f"knowledge-{slug}": {
+            "command": "/bin/sh",
+            "args": ["-c", f'exec "{_portable(start)}" --mode read '
+                           f'--registry "{_portable(target)}" --name knowledge-{slug}']}}},
+            indent=2, ensure_ascii=False)
+        return (f"created topic '{slug}' at {target}\n"
+                f"  git repo, branch v1, commit {sha}\n"
+                f"  seeded: overview.md (charter embedded), log.md, index.md"
+                + (f", folders: {', '.join(subdirs)}" if subdirs else "") + "\n"
+                f"  NOTE: this server stays bound to topic '{TOPIC}'; the new topic needs its "
+                f"own server:\n"
+                f"    manage: {_portable(start)} --mode manage --registry {_portable(target)}\n"
+                f"  read-mode MCP config snippet:\n{cfg}") + RULES_REMINDER
+
 
 if __name__ == "__main__":
-    _status = (f"topic={TOPIC} version={VERSION_LABEL}" + (f" commit={SHA[:12]}" if SHA else "")
-               + (" (git)" if REPO else "")
-               if _ACTIVE_TOPIC is not None
-               else f"{len(_topics_now())} topics, awaiting kb_select_topic")
-    print(f"[knowledge-mcp] mode={ARGS.mode} {_status}", file=sys.stderr)
+    print(f"[knowledge-mcp] mode={ARGS.mode} topic={TOPIC} version={VERSION_LABEL}"
+          + (f" commit={SHA[:12]}" if SHA else "") + (" (git)" if REPO else ""), file=sys.stderr)
     mcp.run()
